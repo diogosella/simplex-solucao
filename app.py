@@ -3,54 +3,156 @@ from tkinter import ttk, scrolledtext, messagebox
 
 from simplex import resolver
 
-MATERIAS = ["Cobre", "Zinco", "Chumbo"]
-LIMITES = [16, 11, 15]
-COMP_A = [2, 1, 1]
-COMP_B = [1, 2, 3]
-PRECO_A_DEFAULT = 30
-PRECO_B_DEFAULT = 50
 
-def resolver_otimo(preco_a, preco_b):
-    c = [preco_a, preco_b]
-    A_ub = [[COMP_A[i], COMP_B[i]] for i in range(3)]
-    b_ub = LIMITES
+CENARIO_PADRAO = {
+    "materiais": ["Cobre", "Zinco", "Chumbo"],
+    "limites":   [16, 11, 15],
+    "ligas":     ["Liga A", "Liga B"],
+    "precos":    [30, 50],
+    "composicao": [
+        [2, 1],
+        [1, 2],
+        [1, 3],
+    ],
+}
 
-    saida = resolver("max", c, A_ub, b_ub)
+
+def resolver_otimo(limites, precos, composicao):
+    saida = resolver("max", precos, composicao, limites, inteiro=True)
     if saida is None:
         return None
-
     x, z = saida
-    return {
-        "x1": float(x[0]),
-        "x2": float(x[1]),
-        "Z": z,
-    }
+    return {"x": [int(round(v)) for v in x], "Z": z}
+
 
 class PlanejadorLigasApp:
 
     def __init__(self, root):
         self.root = root
         root.title("Planejador de Produção - Fábrica de Ligas Metálicas")
-        root.geometry("980x720")
-        root.minsize(900, 650)
+        root.geometry("1100x800")
+        root.minsize(950, 700)
 
-        self.var_preco_a = tk.StringVar(value=str(PRECO_A_DEFAULT))
-        self.var_preco_b = tk.StringVar(value=str(PRECO_B_DEFAULT))
-        self.var_qtd_a = tk.StringVar(value="0")
-        self.var_qtd_b = tk.StringVar(value="0")
+        self.var_n_mat = tk.IntVar(value=len(CENARIO_PADRAO["materiais"]))
+        self.var_n_lig = tk.IntVar(value=len(CENARIO_PADRAO["ligas"]))
+
+        self.var_materiais = []
+        self.var_limites = []
+        self.var_ligas = []
+        self.var_precos = []
+        self.var_composicao = []
+        self.var_qtds = []
+
+        self._popular_padrao()
 
         self._construir_ui()
+        self._gerar_tabela()
+        self._gerar_plano()
+
+    def _popular_padrao(self):
+        self.var_materiais = [tk.StringVar(value=v) for v in CENARIO_PADRAO["materiais"]]
+        self.var_limites = [tk.StringVar(value=str(v)) for v in CENARIO_PADRAO["limites"]]
+        self.var_ligas = [tk.StringVar(value=v) for v in CENARIO_PADRAO["ligas"]]
+        self.var_precos = [tk.StringVar(value=str(v)) for v in CENARIO_PADRAO["precos"]]
+        self.var_composicao = [
+            [tk.StringVar(value=str(v)) for v in linha]
+            for linha in CENARIO_PADRAO["composicao"]
+        ]
+        self.var_qtds = [tk.StringVar(value="0") for _ in CENARIO_PADRAO["ligas"]]
+
+    def _ajustar_dimensoes(self):
+        try:
+            n_mat = int(self.var_n_mat.get())
+            n_lig = int(self.var_n_lig.get())
+        except tk.TclError:
+            return
+        n_mat = max(1, min(99, n_mat))
+        n_lig = max(1, min(26, n_lig))
+
+        while len(self.var_materiais) < n_mat:
+            i = len(self.var_materiais) + 1
+            self.var_materiais.append(tk.StringVar(value=f"Material {i}"))
+            self.var_limites.append(tk.StringVar(value="10"))
+            self.var_composicao.append([tk.StringVar(value="0") for _ in range(len(self.var_ligas))])
+        while len(self.var_materiais) > n_mat:
+            self.var_materiais.pop()
+            self.var_limites.pop()
+            self.var_composicao.pop()
+
+        while len(self.var_ligas) < n_lig:
+            idx = len(self.var_ligas)
+            letra = chr(ord("A") + idx) if idx < 26 else str(idx + 1)
+            self.var_ligas.append(tk.StringVar(value=f"Liga {letra}"))
+            self.var_precos.append(tk.StringVar(value="0"))
+            for linha in self.var_composicao:
+                linha.append(tk.StringVar(value="0"))
+            self.var_qtds.append(tk.StringVar(value="0"))
+        while len(self.var_ligas) > n_lig:
+            self.var_ligas.pop()
+            self.var_precos.pop()
+            for linha in self.var_composicao:
+                linha.pop()
+            self.var_qtds.pop()
+
+        self._gerar_tabela()
+        self._gerar_plano()
+
+    def _criar_scroll(self, parent, titulo, max_height=None):
+        outer = ttk.LabelFrame(parent, text=titulo, padding=4)
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        sb_h = ttk.Scrollbar(outer, orient="horizontal", command=canvas.xview)
+        canvas.configure(xscrollcommand=sb_h.set)
+        sb_v = None
+        if max_height is not None:
+            sb_v = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+            canvas.configure(yscrollcommand=sb_v.set)
+        inner = ttk.Frame(canvas)
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def on_configure(_evt=None):
+            bbox = canvas.bbox("all")
+            if bbox:
+                canvas.configure(scrollregion=bbox)
+                h = bbox[3] - bbox[1]
+                if max_height is None:
+                    canvas.configure(height=h)
+                else:
+                    canvas.configure(height=min(h, max_height))
+        inner.bind("<Configure>", on_configure)
+
+        canvas.grid(row=0, column=0, sticky="nsew")
+        if sb_v is not None:
+            sb_v.grid(row=0, column=1, sticky="ns")
+        sb_h.grid(row=1, column=0, sticky="ew",
+                  columnspan=2 if sb_v is not None else 1)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+        return outer, inner
 
     def _construir_ui(self):
-        titulo = ttk.Label(self.root,
-                           text="Planejador de Produção - Fábrica de Ligas Metálicas",
-                           font=("TkDefaultFont", 13, "bold"))
-        titulo.pack(pady=(10, 4))
-        subt = ttk.Label(self.root,
-                         text="Avalia se o plano de produção proposto compensa, "
-                              "comparando-o com o ótimo via Simplex",
-                         foreground="gray")
-        subt.pack(pady=(0, 8))
+        ttk.Label(self.root,
+                  text="Planejador de Produção - Fábrica de Ligas Metálicas",
+                  font=("TkDefaultFont", 13, "bold")
+                  ).pack(pady=(10, 2))
+        ttk.Label(self.root,
+                  text="Cenário totalmente configurável: nomes, matérias-primas, composições e preços",
+                  foreground="gray"
+                  ).pack(pady=(0, 8))
+
+        frm_cfg = ttk.LabelFrame(self.root, text="Dimensões do cenário", padding=8)
+        frm_cfg.pack(fill="x", padx=10, pady=(0, 6))
+        ttk.Label(frm_cfg, text="Nº de matérias-primas:").grid(row=0, column=0, padx=4)
+        sp1 = ttk.Spinbox(frm_cfg, from_=1, to=99, width=4,
+                          textvariable=self.var_n_mat,
+                          command=self._ajustar_dimensoes)
+        sp1.grid(row=0, column=1, padx=4)
+        ttk.Label(frm_cfg, text="Nº de ligas:").grid(row=0, column=2, padx=(20, 4))
+        sp2 = ttk.Spinbox(frm_cfg, from_=1, to=26, width=4,
+                          textvariable=self.var_n_lig,
+                          command=self._ajustar_dimensoes)
+        sp2.grid(row=0, column=3, padx=4)
+        ttk.Button(frm_cfg, text="Restaurar exemplo padrão",
+                   command=self._restaurar_padrao).grid(row=0, column=4, padx=(20, 4))
 
         main = ttk.Frame(self.root)
         main.pack(fill="both", expand=True, padx=10, pady=4)
@@ -63,47 +165,14 @@ class PlanejadorLigasApp:
         col_dir = ttk.Frame(main)
         col_dir.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
-        frm_mp = ttk.LabelFrame(col_esq, text="Matérias-primas disponíveis (estoque fixo)",
-                                padding=8)
-        frm_mp.pack(fill="x", pady=(0, 6))
-        for i, mat in enumerate(MATERIAS):
-            ttk.Label(frm_mp, text=f"{mat}:").grid(row=i, column=0, sticky="w", padx=4)
-            ttk.Label(frm_mp, text=f"{LIMITES[i]} unidades",
-                      font=("TkDefaultFont", 10, "bold")
-                      ).grid(row=i, column=1, sticky="w", padx=4)
+        outer_tabela, self.frm_tabela = self._criar_scroll(
+            col_esq, "Composição, disponibilidade de matéria-prima e preços",
+            max_height=300)
+        outer_tabela.pack(fill="x", pady=(0, 6))
 
-        frm_comp = ttk.LabelFrame(col_esq, text="Composição das ligas (fixa)", padding=8)
-        frm_comp.pack(fill="x", pady=6)
-        ttk.Label(frm_comp, text="").grid(row=0, column=0)
-        ttk.Label(frm_comp, text="Liga A", font=("TkDefaultFont", 10, "bold")
-                  ).grid(row=0, column=1, padx=10)
-        ttk.Label(frm_comp, text="Liga B", font=("TkDefaultFont", 10, "bold")
-                  ).grid(row=0, column=2, padx=10)
-        for i, mat in enumerate(MATERIAS):
-            ttk.Label(frm_comp, text=mat).grid(row=1 + i, column=0, sticky="w", padx=4)
-            ttk.Label(frm_comp, text=str(COMP_A[i])).grid(row=1 + i, column=1)
-            ttk.Label(frm_comp, text=str(COMP_B[i])).grid(row=1 + i, column=2)
-
-        frm_pre = ttk.LabelFrame(col_esq, text="Preços de venda (cenário - editável)",
-                                 padding=8)
-        frm_pre.pack(fill="x", pady=6)
-        ttk.Label(frm_pre, text="Liga A: R$").grid(row=0, column=0, sticky="e", padx=4)
-        ttk.Entry(frm_pre, textvariable=self.var_preco_a, width=10, justify="center"
-                  ).grid(row=0, column=1, padx=4, pady=2)
-        ttk.Label(frm_pre, text="Liga B: R$").grid(row=0, column=2, sticky="e", padx=(20, 4))
-        ttk.Entry(frm_pre, textvariable=self.var_preco_b, width=10, justify="center"
-                  ).grid(row=0, column=3, padx=4, pady=2)
-
-        frm_pl = ttk.LabelFrame(col_esq, text="Plano de produção proposto", padding=8)
-        frm_pl.pack(fill="x", pady=6)
-        ttk.Label(frm_pl, text="Quantidade de Liga A:").grid(row=0, column=0,
-                                                              sticky="e", padx=4, pady=4)
-        ttk.Entry(frm_pl, textvariable=self.var_qtd_a, width=10, justify="center"
-                  ).grid(row=0, column=1, padx=4, pady=4)
-        ttk.Label(frm_pl, text="Quantidade de Liga B:").grid(row=1, column=0,
-                                                              sticky="e", padx=4, pady=4)
-        ttk.Entry(frm_pl, textvariable=self.var_qtd_b, width=10, justify="center"
-                  ).grid(row=1, column=1, padx=4, pady=4)
+        outer_plano, self.frm_plano = self._criar_scroll(
+            col_esq, "Plano de produção proposto")
+        outer_plano.pack(fill="x", pady=6)
 
         frm_btn = ttk.Frame(col_esq)
         frm_btn.pack(fill="x", pady=(8, 0))
@@ -115,27 +184,111 @@ class PlanejadorLigasApp:
         frm_res = ttk.LabelFrame(col_dir, text="Avaliação do plano", padding=8)
         frm_res.pack(fill="both", expand=True)
         self.txt_resultado = scrolledtext.ScrolledText(frm_res, wrap="word",
-                                                      font=("Consolas", 10), height=30)
+                                                      font=("Consolas", 10), height=34)
         self.txt_resultado.pack(fill="both", expand=True)
-        self.txt_resultado.tag_configure("titulo", font=("TkDefaultFont", 11, "bold"))
         self.txt_resultado.tag_configure("ok", foreground="#0a7a2e",
                                          font=("TkDefaultFont", 10, "bold"))
         self.txt_resultado.tag_configure("erro", foreground="#b00020",
                                          font=("TkDefaultFont", 10, "bold"))
         self.txt_resultado.tag_configure("aviso", foreground="#b07a00",
                                          font=("TkDefaultFont", 10, "bold"))
-        self._escrever("Digite a quantidade desejada de cada liga "
-                       "e clique em 'Avaliar plano'.\n", "")
+        self.txt_resultado.tag_configure("veredito_ok",
+                                         foreground="#0a7a2e",
+                                         font=("TkDefaultFont", 18, "bold"),
+                                         spacing1=8, spacing3=4)
+        self.txt_resultado.tag_configure("veredito_aviso",
+                                         foreground="#b07a00",
+                                         font=("TkDefaultFont", 18, "bold"),
+                                         spacing1=8, spacing3=4)
+        self.txt_resultado.tag_configure("veredito_erro",
+                                         foreground="#b00020",
+                                         font=("TkDefaultFont", 18, "bold"),
+                                         spacing1=8, spacing3=4)
+        self.txt_resultado.tag_configure("subtitulo",
+                                         font=("TkDefaultFont", 11, "italic"),
+                                         foreground="#444",
+                                         spacing3=10)
+        self.txt_resultado.configure(state="disabled")
+
+    def _gerar_tabela(self):
+        for w in self.frm_tabela.winfo_children():
+            w.destroy()
+
+        n_mat = len(self.var_materiais)
+        n_lig = len(self.var_ligas)
+
+        ttk.Label(self.frm_tabela, text="Matéria-prima",
+                  font=("TkDefaultFont", 10, "bold")
+                  ).grid(row=0, column=0, padx=4, pady=4, sticky="w")
+        for j in range(n_lig):
+            ttk.Entry(self.frm_tabela, textvariable=self.var_ligas[j],
+                      width=10, justify="center", font=("TkDefaultFont", 10, "bold")
+                      ).grid(row=0, column=1 + j, padx=2, pady=4)
+        ttk.Label(self.frm_tabela, text="Disponível",
+                  font=("TkDefaultFont", 10, "bold")
+                  ).grid(row=0, column=1 + n_lig, padx=(10, 4), pady=4)
+
+        for i in range(n_mat):
+            ttk.Entry(self.frm_tabela, textvariable=self.var_materiais[i],
+                      width=14, justify="left"
+                      ).grid(row=1 + i, column=0, padx=4, pady=2)
+            for j in range(n_lig):
+                ttk.Entry(self.frm_tabela, textvariable=self.var_composicao[i][j],
+                          width=10, justify="center"
+                          ).grid(row=1 + i, column=1 + j, padx=2, pady=2)
+            ttk.Entry(self.frm_tabela, textvariable=self.var_limites[i],
+                      width=10, justify="center"
+                      ).grid(row=1 + i, column=1 + n_lig, padx=(10, 4), pady=2)
+
+        linha_preco = 1 + n_mat
+        ttk.Label(self.frm_tabela, text="Preço unitário R$",
+                  font=("TkDefaultFont", 10, "italic")
+                  ).grid(row=linha_preco, column=0, padx=4, pady=(8, 2), sticky="e")
+        for j in range(n_lig):
+            ttk.Entry(self.frm_tabela, textvariable=self.var_precos[j],
+                      width=10, justify="center"
+                      ).grid(row=linha_preco, column=1 + j, padx=2, pady=(8, 2))
+        ttk.Label(self.frm_tabela, text="—", foreground="gray"
+                  ).grid(row=linha_preco, column=1 + n_lig, padx=(10, 4), pady=(8, 2))
+
+    def _gerar_plano(self):
+        for w in self.frm_plano.winfo_children():
+            w.destroy()
+
+        n_lig = len(self.var_ligas)
+        ttk.Label(self.frm_plano,
+                  text="Quanto pretende produzir de cada liga?",
+                  foreground="gray"
+                  ).grid(row=0, column=0, columnspan=2 * n_lig, sticky="w", padx=4, pady=(0, 6))
+        for j in range(n_lig):
+            ttk.Label(self.frm_plano, textvariable=self.var_ligas[j]
+                      ).grid(row=1, column=2 * j, sticky="e", padx=(8, 4), pady=4)
+            ttk.Entry(self.frm_plano, textvariable=self.var_qtds[j],
+                      width=8, justify="center"
+                      ).grid(row=1, column=2 * j + 1, padx=(0, 8), pady=4)
+
+    def _restaurar_padrao(self):
+        self.var_n_mat.set(len(CENARIO_PADRAO["materiais"]))
+        self.var_n_lig.set(len(CENARIO_PADRAO["ligas"]))
+        self._popular_padrao()
+        self._gerar_tabela()
+        self._gerar_plano()
+        self._limpar_resultado()
+        self._escrever("Cenário padrão (problema das ligas) restaurado.\n")
 
     def _escrever(self, texto, tag=""):
+        self.txt_resultado.configure(state="normal")
         if tag:
             self.txt_resultado.insert("end", texto, tag)
         else:
             self.txt_resultado.insert("end", texto)
         self.txt_resultado.see("end")
+        self.txt_resultado.configure(state="disabled")
 
     def _limpar_resultado(self):
+        self.txt_resultado.configure(state="normal")
         self.txt_resultado.delete("1.0", "end")
+        self.txt_resultado.configure(state="disabled")
 
     def _ler_float(self, valor, nome):
         try:
@@ -143,131 +296,128 @@ class PlanejadorLigasApp:
         except ValueError:
             raise ValueError(f"Valor inválido em '{nome}': '{valor}'.")
 
+    def _coletar_cenario(self):
+        n_mat = len(self.var_materiais)
+        n_lig = len(self.var_ligas)
+        materiais = [v.get().strip() or f"Material {i+1}" for i, v in enumerate(self.var_materiais)]
+        ligas = [v.get().strip() or f"Liga {j+1}" for j, v in enumerate(self.var_ligas)]
+        limites = [self._ler_float(self.var_limites[i].get(), f"Disponível de {materiais[i]}")
+                   for i in range(n_mat)]
+        precos = [self._ler_float(self.var_precos[j].get(), f"Preço de {ligas[j]}")
+                  for j in range(n_lig)]
+        composicao = [[self._ler_float(self.var_composicao[i][j].get(),
+                                       f"Composição {materiais[i]}/{ligas[j]}")
+                       for j in range(n_lig)]
+                      for i in range(n_mat)]
+        qtds = [self._ler_float(self.var_qtds[j].get(), f"Quantidade de {ligas[j]}")
+                for j in range(n_lig)]
+        return materiais, limites, ligas, precos, composicao, qtds
+
     def _avaliar(self):
         self._limpar_resultado()
         try:
-            preco_a = self._ler_float(self.var_preco_a.get(), "Preço Liga A")
-            preco_b = self._ler_float(self.var_preco_b.get(), "Preço Liga B")
-            qa = self._ler_float(self.var_qtd_a.get(), "Quantidade Liga A")
-            qb = self._ler_float(self.var_qtd_b.get(), "Quantidade Liga B")
+            materiais, limites, ligas, precos, composicao, qtds = self._coletar_cenario()
         except ValueError as e:
             messagebox.showerror("Entrada inválida", str(e))
             return
 
-        if qa < 0 or qb < 0:
-            messagebox.showerror("Entrada inválida",
-                                 "As quantidades de produção não podem ser negativas.")
+        if any(q < 0 for q in qtds):
+            messagebox.showerror("Entrada inválida", "Quantidades não podem ser negativas.")
             return
-        if preco_a < 0 or preco_b < 0:
-            messagebox.showerror("Entrada inválida",
-                                 "Os preços não podem ser negativos.")
+        if any(p < 0 for p in precos) or any(l < 0 for l in limites):
+            messagebox.showerror("Entrada inválida", "Preços e disponibilidades não podem ser negativos.")
             return
 
-        if qa != int(qa) or qb != int(qb):
-            messagebox.showwarning(
-                "Atenção - frações de liga",
-                "O enunciado diz que frações de liga metálica não podem ser "
-                "consideradas. Os valores serão avaliados mesmo assim, mas "
-                "considere usar números inteiros.")
+        fracoes = [(ligas[j], qtds[j]) for j in range(len(qtds)) if qtds[j] != int(qtds[j])]
+        if fracoes:
+            detalhes = ", ".join(f"{n} = {v:g}" for n, v in fracoes)
+            messagebox.showerror(
+                "Quantidade fracionada não permitida",
+                "Uma liga metálica não pode ser produzida em frações.\n"
+                f"Corrija para um número inteiro: {detalhes}.")
+            return
 
-        consumo = [COMP_A[i] * qa + COMP_B[i] * qb for i in range(3)]
-        viavel = all(consumo[i] <= LIMITES[i] + 1e-9 for i in range(3))
+        n_mat = len(materiais)
+        n_lig = len(ligas)
+        consumo = [sum(composicao[i][j] * qtds[j] for j in range(n_lig)) for i in range(n_mat)]
+        viavel = all(consumo[i] <= limites[i] + 1e-9 for i in range(n_mat))
+        receita = sum(precos[j] * qtds[j] for j in range(n_lig))
+        otimo = resolver_otimo(limites, precos, composicao)
 
-        receita_plano = preco_a * qa + preco_b * qb
-
-        otimo = resolver_otimo(preco_a, preco_b)
-
-        self._escrever("CENÁRIO AVALIADO\n", "titulo")
-        self._escrever(f"  Preço Liga A: R$ {preco_a:.2f}    "
-                       f"Preço Liga B: R$ {preco_b:.2f}\n")
-        self._escrever(f"  Plano proposto: produzir {qa:g} de Liga A "
-                       f"e {qb:g} de Liga B\n\n")
-
-        self._escrever("CONSUMO DE MATÉRIA-PRIMA\n", "titulo")
-        for i, mat in enumerate(MATERIAS):
-            cons = consumo[i]
-            lim = LIMITES[i]
-            sobra = lim - cons
-            marca = "OK" if cons <= lim + 1e-9 else "EXCEDIDO"
-            tag = "ok" if marca == "OK" else "erro"
-            self._escrever(f"  {mat:8s} {cons:6.2f} / {lim:>2}   ")
-            if sobra >= 0:
-                self._escrever(f"(sobra {sobra:.2f})  ")
-            else:
-                self._escrever(f"(falta {-sobra:.2f})  ")
-            self._escrever(f"[{marca}]\n", tag)
-        self._escrever("\n")
+        partes_seu = " + ".join(f"{int(qtds[j])} {ligas[j]}"
+                                for j in range(n_lig) if qtds[j] > 0) or "(nenhuma liga)"
 
         if not viavel:
-            self._escrever("STATUS: PLANO INVIÁVEL\n", "erro")
-            self._escrever("O plano excede o estoque de pelo menos uma matéria-prima. "
-                           "Reduza a quantidade de produção.\n\n")
-        else:
-            self._escrever("STATUS: PLANO VIÁVEL\n", "ok")
-            self._escrever("Todas as restrições de matéria-prima foram respeitadas.\n\n")
-
-        self._escrever("ANÁLISE FINANCEIRA\n", "titulo")
-        self._escrever(f"  Receita do seu plano:  R$ {receita_plano:8.2f}\n")
+            excesso = [(materiais[i], consumo[i], limites[i])
+                       for i in range(n_mat) if consumo[i] > limites[i] + 1e-9]
+            primeira = excesso[0]
+            self._escrever("PLANO INVIÁVEL\n", "veredito_erro")
+            self._escrever(
+                f"Falta {primeira[1] - primeira[2]:g} unidade(s) de {primeira[0]} "
+                f"para esse plano.\n", "subtitulo")
+            self._escrever(f"Seu plano:  {partes_seu}\n\n")
+            if len(excesso) > 1:
+                self._escrever("Matérias-primas com falta:\n")
+                for nome, cons, lim in excesso:
+                    self._escrever(f"  • {nome}: precisa {cons:g}, "
+                                   f"tem {lim:g} (falta {cons-lim:g})\n", "erro")
+            else:
+                nome, cons, lim = primeira
+                self._escrever(f"{nome}: você precisa de {cons:g}, "
+                               f"mas o estoque é {lim:g}.\n", "erro")
+            self._escrever("\nReduza a produção para caber no estoque disponível.\n")
+            return
 
         if otimo is None:
-            self._escrever("  (não foi possível calcular o ótimo)\n", "aviso")
+            self._escrever("PLANO VIÁVEL\n", "veredito_ok")
+            self._escrever(f"Receita: R$ {receita:.2f}\n", "subtitulo")
+            self._escrever("(Não foi possível calcular o ótimo para comparação.)\n", "aviso")
             return
 
-        self._escrever(f"  Receita ótima possível: R$ {otimo['Z']:8.2f}   "
-                       f"(produzindo {otimo['x1']:.2f} de A e {otimo['x2']:.2f} de B)\n")
+        diferenca = otimo["Z"] - receita
+        pct = 100 * receita / otimo["Z"] if otimo["Z"] > 1e-9 else 0
 
-        diferenca = otimo["Z"] - receita_plano
-        if otimo["Z"] > 1e-9:
-            pct = 100 * receita_plano / otimo["Z"]
-        else:
-            pct = 0
-        self._escrever(f"  Diferença para o ótimo: R$ {diferenca:8.2f}   "
-                       f"({pct:.1f}% do ótimo)\n\n")
+        if abs(diferenca) < 0.01:
+            self._escrever("CENÁRIO IDEAL\n", "veredito_ok")
+            self._escrever("Este é o melhor plano possível com o estoque disponível.\n",
+                           "subtitulo")
+            self._escrever(f"Produção:  {partes_seu}\n")
+            self._escrever(f"Receita:   R$ {receita:.2f}\n")
+            return
 
-        self._escrever("VEREDITO\n", "titulo")
-        if not viavel:
-            self._escrever(
-                "NÃO COMPENSA - o plano é INVIÁVEL. Ajuste as quantidades para "
-                "respeitar o estoque de matéria-prima.\n", "erro")
-        elif abs(diferenca) < 0.01:
-            self._escrever(
-                "EXCELENTE - este plano é exatamente o ÓTIMO neste cenário. "
-                "Não há receita maior alcançável com a matéria-prima disponível.\n",
-                "ok")
-        elif pct >= 95:
-            self._escrever(
-                f"COMPENSA, mas ainda dá pra melhorar - você está a {pct:.1f}% "
-                f"do ótimo. Considere ajustar para {otimo['x1']:.2f} de A e "
-                f"{otimo['x2']:.2f} de B para ganhar mais R$ {diferenca:.2f}.\n",
-                "aviso")
-        else:
-            self._escrever(
-                f"NÃO COMPENSA - você está deixando R$ {diferenca:.2f} na mesa "
-                f"({100-pct:.1f}% abaixo do ótimo). O melhor plano para esses "
-                f"preços é produzir {otimo['x1']:.2f} de Liga A e "
-                f"{otimo['x2']:.2f} de Liga B (receita R$ {otimo['Z']:.2f}).\n",
-                "erro")
+        partes_otimo = " + ".join(f"{otimo['x'][j]} {ligas[j]}"
+                                  for j in range(n_lig) if otimo["x"][j] > 0)
+
+        self._escrever("NÃO É O CENÁRIO IDEAL\n", "veredito_aviso")
+        self._escrever(
+            f"Você está deixando R$ {diferenca:.2f} na mesa "
+            f"({100-pct:.1f}% abaixo do máximo possível).\n",
+            "subtitulo")
+        self._escrever(f"Seu plano:    {partes_seu}\n")
+        self._escrever(f"              R$ {receita:.2f}\n\n")
+        self._escrever(f"Plano ideal:  {partes_otimo}\n", "ok")
+        self._escrever(f"              R$ {otimo['Z']:.2f}\n", "ok")
 
     def _carregar_otimo(self):
         try:
-            preco_a = self._ler_float(self.var_preco_a.get(), "Preço Liga A")
-            preco_b = self._ler_float(self.var_preco_b.get(), "Preço Liga B")
+            _materiais, limites, _ligas, precos, composicao, _qtds = self._coletar_cenario()
         except ValueError as e:
             messagebox.showerror("Entrada inválida", str(e))
             return
-        otimo = resolver_otimo(preco_a, preco_b)
+        otimo = resolver_otimo(limites, precos, composicao)
         if otimo is None:
             messagebox.showerror("Erro", "Não foi possível calcular o plano ótimo.")
             return
-        self.var_qtd_a.set(str(int(round(otimo["x1"]))))
-        self.var_qtd_b.set(str(int(round(otimo["x2"]))))
+        for j, v in enumerate(otimo["x"]):
+            self.var_qtds[j].set(str(v))
         self._avaliar()
+
 
 def main():
     root = tk.Tk()
     PlanejadorLigasApp(root)
     root.mainloop()
 
+
 if __name__ == "__main__":
     main()
-
