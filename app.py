@@ -313,6 +313,19 @@ class PlanejadorLigasApp:
                 for j in range(n_lig)]
         return materiais, limites, ligas, precos, composicao, qtds
 
+    def _escrever_uso_materiais(self, materiais, consumo, limites):
+        self._escrever("\nUso de matéria-prima:\n", "subtitulo")
+        for i, nome in enumerate(materiais):
+            cons, lim = consumo[i], limites[i]
+            sobra = lim - cons
+            self._escrever(f"  • {nome}: {cons:g} / {lim:g}   ")
+            if sobra > 1e-9:
+                self._escrever(f"(sobra {sobra:g})\n", "ok")
+            elif sobra < -1e-9:
+                self._escrever(f"(falta {-sobra:g})\n", "erro")
+            else:
+                self._escrever("(totalmente usado)\n", "aviso")
+
     def _avaliar(self):
         self._limpar_resultado()
         try:
@@ -355,16 +368,8 @@ class PlanejadorLigasApp:
             self._escrever(
                 f"Falta {primeira[1] - primeira[2]:g} unidade(s) de {primeira[0]} "
                 f"para esse plano.\n", "subtitulo")
-            self._escrever(f"Seu plano:  {partes_seu}\n\n")
-            if len(excesso) > 1:
-                self._escrever("Matérias-primas com falta:\n")
-                for nome, cons, lim in excesso:
-                    self._escrever(f"  • {nome}: precisa {cons:g}, "
-                                   f"tem {lim:g} (falta {cons-lim:g})\n", "erro")
-            else:
-                nome, cons, lim = primeira
-                self._escrever(f"{nome}: você precisa de {cons:g}, "
-                               f"mas o estoque é {lim:g}.\n", "erro")
+            self._escrever(f"Seu plano:  {partes_seu}\n")
+            self._escrever_uso_materiais(materiais, consumo, limites)
             self._escrever("\nReduza a produção para caber no estoque disponível.\n")
             return
 
@@ -397,6 +402,7 @@ class PlanejadorLigasApp:
         self._escrever(f"              R$ {receita:.2f}\n\n")
         self._escrever(f"Plano ideal:  {partes_otimo}\n", "ok")
         self._escrever(f"              R$ {otimo['Z']:.2f}\n", "ok")
+        self._escrever_uso_materiais(materiais, consumo, limites)
 
     def _carregar_otimo(self):
         try:
